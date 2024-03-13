@@ -1,4 +1,5 @@
 import glob
+import os
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -14,33 +15,17 @@ col_vel = "Velocity (m/s)"
 col_acc = "Acceleration (m/s²)"
 
 
-def find_sign_changes(data):
-    acceleration = data['Acceleration 1 (m/s²)']
+def create_folder_structure():
+    os.makedirs("plots/Elastic", exist_ok=True)
+    os.makedirs("plots/Explosive", exist_ok=True)
+    os.makedirs("plots/Inelastic", exist_ok=True)
 
-    sign = acceleration.map(np.sign)
-    diff1 = sign.diff(periods=1).fillna(0)
-    diff2 = sign.diff(periods=-1).fillna(0)
-    # print(diff1)
-    # print(diff2)
-
-    df1 = data.loc[diff1[diff1 != 0].index]
-    df2 = data.loc[diff2[diff2 != 0].index]
-    # print(df1)
-    # print(df2)
-
-    idx = np.where(abs(df1['Acceleration 1 (m/s²)'].values) < abs(df2['Acceleration 1 (m/s²)'].values),
-                   df1.index.values, df2.index.values)
-    print(idx)
-    # print(data.loc[idx])
-
-    l_mod = [data.index[0]] + list(idx) + [data.index[-1]]
-    print(l_mod)
-    ranges = [(l_mod[n], l_mod[n + 1]) for n in range(len(l_mod) - 1)]
-    df_ranges = []
-    for range_start, range_end in ranges:
-        print(range_start, range_end)
-        df_ranges.append(data.loc[range_start:range_end])
-    print(df_ranges)
+    os.makedirs("results/Elastic", exist_ok=True)
+    os.makedirs("results/Explosive", exist_ok=True)
+    os.makedirs("results/Inelastic", exist_ok=True)
+    os.makedirs("results/tex/Elastic", exist_ok=True)
+    os.makedirs("results/tex/Explosive", exist_ok=True)
+    os.makedirs("results/tex/Inelastic", exist_ok=True)
 
 
 def find_acceleration_peaks(data):
@@ -332,6 +317,7 @@ def export_to_tex(df, path, experiment):
 
 
 def main():
+    create_folder_structure()
     experiments = ["Elastic", "Explosive", "Inelastic"]
     for experiment in experiments:
         analyze_experiment(experiment)
