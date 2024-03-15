@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -71,8 +72,12 @@ def load_weights():
     return pd.read_csv("data/weight_config.csv").set_index("weight_config")
 
 
+def load_uncertainties():
+    return pd.read_csv("data/uncertainties.csv").set_index("quantity")
+
+
 def load_files(experiment, selected_weight_config):
-    data_path = f"data/{experiment}Data"
+    data_path = f"data/{experiment}"
 
     csv_files = glob.glob(data_path + f"/*{selected_weight_config}*.csv")
 
@@ -127,7 +132,7 @@ def find_intersecting_region(regions_a, center):
             return region
 
 
-def do_analysis(carts):
+def do_analysis(carts, uncertainties):
     speeds = {}
     regions_cart_a = find_regions(carts[col_cart_a])
     regions_cart_b = find_regions(carts[col_cart_b])
@@ -141,12 +146,25 @@ def do_analysis(carts):
     fig, ax = make_plot()
     # plot_data(carts[col_cart_b][0:4.5], fig, ax)
 
-    speeds['initial_a'] = carts[col_cart_a][col_vel][regions_cart_b[1][0]]
-    speeds['initial_b'] = carts[col_cart_b][col_vel][regions_cart_b[1][0]]
+    initial_speed_a = carts[col_cart_a][col_vel][regions_cart_b[1][0]]
+    initial_speed_b = carts[col_cart_b][col_vel][regions_cart_b[1][0]]
+    final_speed_a = carts[col_cart_a][col_vel][regions_cart_b[1][1]]
+    final_speed_b = carts[col_cart_b][col_vel][regions_cart_b[1][1]]
 
-    speeds['final_a'] = carts[col_cart_a][col_vel][regions_cart_b[1][1]]
-    speeds['final_b'] = carts[col_cart_b][col_vel][regions_cart_b[1][1]]
+    speeds['initial_a'] = initial_speed_a
+    speeds['initial_b'] = initial_speed_b
+    speeds['final_a'] = final_speed_a
+    speeds['final_b'] = final_speed_b
 
+    speeds['initial_a_err'] = calculate_speed_error(carts[col_cart_a][col_pos][regions_cart_b[1][0]],
+                                                    regions_cart_b[1][0], uncertainties)
+    speeds['initial_b_err'] = calculate_speed_error(carts[col_cart_b][col_pos][regions_cart_b[1][0]],
+                                                    regions_cart_b[1][0], uncertainties)
+
+    speeds['final_a_err'] = calculate_speed_error(carts[col_cart_a][col_pos][regions_cart_b[1][1]],
+                                                  regions_cart_b[1][1], uncertainties)
+    speeds['final_b_err'] = calculate_speed_error(carts[col_cart_b][col_pos][regions_cart_b[1][1]],
+                                                  regions_cart_b[1][1], uncertainties)
     # plot_data(carts[col_cart_a], fig, ax, "dfq")
 
     plot_region(carts[col_cart_a], intersecting_region, fig, ax, label='Cart A')
@@ -178,77 +196,199 @@ def build_dataframe(data):
 
 
 def add_velocities_to_table(speeds, weight_config, vel_table):
-    new_row = [weight_config['cart_a'], speeds['initial_a'], speeds['final_a'],
-               weight_config['cart_b'], speeds['initial_b'], speeds['final_b']]
+    new_row = [weight_config['cartA'], speeds['initial_a'], speeds['initial_a_err'],
+               speeds['final_a'], speeds['final_a_err'],
+               weight_config['cartB'], speeds['initial_b'], speeds['final_a_err'],
+               speeds['final_b'], speeds['final_b_err']]
     vel_table.loc[len(vel_table)] = pd.Series(new_row, index=vel_table.columns)
 
 
-def add_momenta_to_table(speeds, weight_config, momenta_table):
-    weight_cart_a = weight_config['cart_a']
-    weight_cart_b = weight_config['cart_b']
-    total_momentum_before = weight_cart_a * speeds['initial_a'] + weight_cart_b * speeds['initial_b']
-    total_kinetic_energy_before = (weight_cart_a / 2) * (speeds['initial_a'] ** 2) + (weight_cart_b / 2) * (
-            speeds['initial_b'] ** 2)
-    total_kinetic_energy_after = (weight_cart_a / 2) * (speeds['final_a'] ** 2) + (weight_cart_b / 2) * (
-            speeds['final_b'] ** 2)
-    total_momentum_after = weight_cart_a * speeds['final_a'] + weight_cart_b * speeds['final_b']
+def calculate_speed_error(position, time, uncertainties):
+    a = (1/time) * (uncertainties.loc['position'].value * position)
+    b = position/(time**2) * uncertainties.loc['time'].value
+    return np.sqrt(a ** 2 + b ** 2)
 
-    new_row = [total_momentum_before, total_kinetic_energy_before, total_momentum_after, total_kinetic_energy_after]
-    momenta_table.loc[len(momenta_table)] = pd.Series(new_row, index=momenta_table.columns)
+
+def calculate_kinetic_energy_error(mass, velocity, velocity_acc, uncertainties):
+    a = (velocity**2 / 2) * uncertainties.loc['mass'].value
+    b = mass * velocity_acc
+    return np.sqrt(a ** 2 + b ** 2)
+
+
+def calculate_momentum_error(mass, velocity, velocity_acc, uncertainties):
+    a = velocity * uncertainties.loc['mass'].value
+    b = mass * velocity_acc
+    return np.sqrt(a ** 2 + b ** 2)
+
+
+def calculate_momentum(velocity, mass):
+    return velocity * mass
+
+
+def calculate_kinetic_energy(mass, velocity):
+    return (mass / 2) * (velocity ** 2)
+
+
+def add_momenta_to_table(speeds, run, weight_config, momenta_table, uncertainties):
+    weight = weight_config[1]
+    weight_cart_a = weight['cartA']
+    weight_cart_b = weight['cartB']
+
+    initial_momentum_cart_a = calculate_momentum(weight_cart_a, speeds['initial_a'])
+    initial_momentum_error_cart_a = calculate_momentum_error(weight_cart_a, speeds['initial_a'],
+                                                             speeds['initial_a_err'], uncertainties)
+    initial_momentum_cart_b = calculate_momentum(weight_cart_b, speeds['initial_b'])
+    initial_momentum_error_cart_b = calculate_momentum_error(weight_cart_b, speeds['initial_b'],
+                                                             speeds['initial_b_err'], uncertainties)
+
+    final_momentum_cart_a = calculate_momentum(weight_cart_a, speeds['final_a'])
+    final_momentum_error_cart_a = calculate_momentum_error(weight_cart_a, speeds['final_a'],
+                                                           speeds['final_a_err'], uncertainties)
+    final_momentum_cart_b = calculate_momentum(weight_cart_b, speeds['final_b'])
+    final_momentum_error_cart_b = calculate_momentum_error(weight_cart_b, speeds['final_b'],
+                                                           speeds['final_b_err'], uncertainties)
+
+    total_momentum_before = initial_momentum_cart_a + initial_momentum_cart_b
+    total_momentum_error_before = initial_momentum_error_cart_a + initial_momentum_error_cart_b
+    total_momentum_after = final_momentum_cart_a + final_momentum_cart_b
+    total_momentum_error_after = final_momentum_error_cart_a + final_momentum_error_cart_b
+
+    initial_kinetic_energy_cart_a = calculate_kinetic_energy(weight_cart_a, speeds['initial_a'])
+    initial_kinetic_energy_error_cart_a = (
+        calculate_kinetic_energy_error(weight_cart_a, speeds['initial_a'], speeds['initial_a_err'], uncertainties))
+    initial_kinetic_energy_cart_b = calculate_kinetic_energy(weight_cart_b, speeds['initial_b'])
+    initial_kinetic_energy_error_cart_b = (
+        calculate_kinetic_energy_error(weight_cart_b, speeds['initial_b'], speeds['initial_b_err'], uncertainties))
+
+    final_kinetic_energy_cart_a = calculate_kinetic_energy(weight_cart_a, speeds['final_a'])
+    final_kinetic_energy_error_cart_a = calculate_kinetic_energy_error(weight_cart_a, speeds['final_a'],
+                                                                       speeds['final_a_err'], uncertainties)
+    final_kinetic_energy_cart_b = calculate_kinetic_energy(weight_cart_b, speeds['final_b'])
+    final_kinetic_energy_error_cart_b = calculate_kinetic_energy_error(weight_cart_b, speeds['final_b'],
+                                                                       speeds['final_b_err'], uncertainties)
+
+    total_kinetic_energy_before = initial_kinetic_energy_cart_a + initial_kinetic_energy_cart_b
+    total_kinetic_energy_error_before = initial_kinetic_energy_error_cart_a + initial_kinetic_energy_error_cart_b
+    total_kinetic_energy_after = final_kinetic_energy_cart_a + final_kinetic_energy_cart_b
+    total_kinetic_energy_error_after = final_kinetic_energy_error_cart_a + final_kinetic_energy_error_cart_b
+
+    new_row = [total_momentum_before, total_momentum_error_before,
+               total_kinetic_energy_before, total_kinetic_energy_error_before,
+               total_momentum_after, total_momentum_error_after,
+               total_kinetic_energy_after, total_kinetic_energy_error_after]
+    ind = (weight['name'], run)
+    momenta_table.loc[ind, :] = new_row
 
 
 def new_velocity_table():
-    vel_header = ['Mass (kg)', 'Initial velocity (m/s)', 'Final velocity (m/s)']
+    vel_header = ['Mass (kg)', 'Initial velocity (m/s)', 'Initial velocity err (m/s)',
+                  'Final velocity (m/s)', 'Final velocity err (m/s)']
 
     vel_table = pd.DataFrame(columns=vel_header * 2)
-    vel_table.columns = pd.MultiIndex.from_tuples([('A', i) for i in vel_header] + [('B', i) for i in vel_header])
+    vel_table.columns = pd.MultiIndex.from_tuples(
+        [('Cart A', i) for i in vel_header] + [('Cart B', i) for i in vel_header])
     vel_table.index.name = "Run"
     return vel_table
 
 
 def new_before_after_table():
-    momenta_header = ['Momentum (kg-m/s)', 'Kinetic energy (J)']
-    momenta_table = pd.DataFrame(columns=momenta_header * 2)
+    multi_index = pd.MultiIndex.from_tuples([], names=['weight config', 'run'])
+    momenta_header = ['Momentum (kg-m/s)', 'Momentum err (kg-m/s)', 'Kinetic energy (J)', 'Kinetic energy err (J)']
+    momenta_table = pd.DataFrame(columns=momenta_header * 2, index=multi_index)
     momenta_table.columns = pd.MultiIndex.from_tuples([('Before', i) for i in momenta_header] +
                                                       [('After', i) for i in momenta_header])
     momenta_table.index.name = "Run"
-
     return momenta_table
 
 
-def run_full_analysis(experiment, weights, vel_table, momenta_table):
+def new_momentum_gain_table():
+    multi_index = pd.MultiIndex.from_tuples([], names=['weight config', 'run'])
+    gain_header = ['Momentum gain cart A (%)', 'Momentum gain cart B (%)']
+    gain_table = pd.DataFrame(columns=gain_header, index=multi_index)
+    gain_table.index.name = "Run"
+    return gain_table
+
+
+def add_row_to_gain(weight_config, run, speeds, gain_table):
+    weight = weight_config[1]
+    weight_cart_a = weight['cartA']
+    weight_cart_b = weight['cartB']
+
+    initial_momentum_cart_a = calculate_momentum(weight_cart_a, speeds['initial_a'])
+    initial_momentum_cart_b = calculate_momentum(weight_cart_b, speeds['initial_b'])
+
+    final_momentum_cart_a = calculate_momentum(weight_cart_a, speeds['final_a'])
+    final_momentum_cart_b = calculate_momentum(weight_cart_b, speeds['final_b'])
+
+    new_row = [abs((final_momentum_cart_a / initial_momentum_cart_a) * 100),
+               (abs(final_momentum_cart_b / initial_momentum_cart_b) * 100)]
+    ind = (weight['name'], run)
+    gain_table.loc[ind, :] = new_row
+
+
+def run_full_analysis(experiment, weights, vel_table, momenta_table, gain_table, uncertainties):
     runs = load_files(experiment, weights[0])
     for key in runs:
+        run = int(key.split("-")[5].split(".")[0])
         print(key)
+        print(run)
         print(weights)
         carts = build_dataframe(runs[key])
-        speeds = do_analysis(carts)
-        plt.title(f"{experiment} Collision ({weights[1]['title']})")
+        speeds = do_analysis(carts, uncertainties)
+        plt.title(f"{experiment} Collision ({weights[1]['info']})")
         add_velocities_to_table(speeds, weights[1], vel_table)
-        add_momenta_to_table(speeds, weights[1], momenta_table)
-        plt.savefig(f"plots/{experiment}/{key.replace('.csv','')}.png", dpi=300)
+        add_momenta_to_table(speeds, run, weights, momenta_table, uncertainties)
+        add_row_to_gain(weights, run, speeds, gain_table)
+        plt.savefig(f"plots/{experiment}/{key.replace('.csv', '')}.png", dpi=300)
     plt.close()
 
 
-def scatter_plot_with_line_fit(data, x_values, y_values, x_lbl, y_lbl, title):
+def scatter_plot_with_line_fit(data, x_name, y_name, x_lbl, y_lbl, title, x_err_name=None, y_err_name=None):
+    # multi_index = pd.MultiIndex.from_tuples([], names=['weight config', 'run'])
+    # momenta_header = ['Momentum (kg-m/s)', 'Momentum (kg-m/s) std', 'Kinetic energy (J)', 'Kinetic energy (J) std']
+    # df = pd.DataFrame(columns=momenta_header * 2, index=multi_index)
+    # df.columns = pd.MultiIndex.from_tuples([('Before', i) for i in momenta_header] +
+    #                                       [('After', i) for i in momenta_header])
+
+    # for index, row in data.iterrows():
+    #    err_val = error_tbl.loc[index[0]]
+    #    bef_mom_std = err_val['Before']['Momentum std']
+    #    bef_mom = row['Before']['Momentum (kg-m/s)']
+
+    #    bef_kin_std = err_val['Before']['Kinetic energy std']
+    #    bef_kin = row['Before']['Kinetic energy (J)']
+
+    #    aft_mom_std = err_val['After']['Momentum std']
+    #    aft_mom = row['After']['Momentum (kg-m/s)']
+
+    #    aft_kin_std = err_val['After']['Kinetic energy std']
+    #    aft_kin = row['After']['Kinetic energy (J)']
+    #    new_row = [bef_mom, bef_mom_std, bef_kin, bef_kin_std, aft_mom, aft_mom_std, aft_kin, aft_kin_std]
+    #    df.loc[index, :] = new_row
+
+    df = data
+
     fig, ax = make_plot()
+
+    x_values = df[x_name].values.tolist()
+    y_values = df[y_name].values.tolist()
+    x_err = df[x_err_name].values.tolist()
+    y_err = df[y_err_name].values.tolist()
 
     coefficients, covariance_matrix = np.polyfit(x_values, y_values, 1, cov=True)
     slope = coefficients[0]
     intercept = coefficients[1]
     slope_variance = covariance_matrix[0, 0]
 
+    if x_err and y_err:
+        plt.errorbar(x_values, y_values, xerr=x_err, yerr=y_err, fmt='none', linewidth=1, capsize=3)
     # Plot data and linear fit
-    plt.scatter(x_values, y_values, label='Data')
+    plt.scatter(x_values, y_values, color='orange', label='Data')
     plt.plot(x_values, np.polyval(coefficients, x_values), label=f"Fit: slope={slope:.2f}, intercept={intercept:.2f}")
-
     # Plot error bars for uncertainty
-    #plt.errorbar(x_values, np.polyval(coefficients, x_values), yerr=np.sqrt(slope_variance), fmt='none',
-    #             label=f'Uncertainty: ±{np.sqrt(slope_variance):.2f}')
 
     plt.plot([], [], ' ', label=f'Uncertainty: ±{np.sqrt(slope_variance):.2f}')
 
-    ax.scatter(x=x_values, y=y_values)
     ax.set_xlabel(x_lbl)
     ax.set_ylabel(y_lbl)
     ax.legend()
@@ -257,60 +397,113 @@ def scatter_plot_with_line_fit(data, x_values, y_values, x_lbl, y_lbl, title):
     return
 
 
-def analyze_experiment(experiment):
+def run_statistical_analysis(data):
+    print(data)
+    b = data.groupby(level='weight config').std()
+    b.columns = pd.MultiIndex.from_tuples(b.set_axis(b.columns.values, axis=1)
+                                          .rename(columns={('Before', 'Momentum (kg-m/s)'): ('Before', 'Momentum std'),
+                                                           ('Before', 'Kinetic energy (J)'): (
+                                                               'Before', 'Kinetic energy std'),
+                                                           ('After', 'Momentum (kg-m/s)'): ('After', 'Momentum std'),
+                                                           ('After', 'Kinetic energy (J)'): (
+                                                               'After', 'Kinetic energy std')}))
+    return b
+
+
+def analyze_experiment(experiment, uncertainties):
     weight_table = load_weights()
     vel_table = new_velocity_table()
+    gain_table = new_momentum_gain_table()
     momenta_table = new_before_after_table()
     for selected_weight in weight_table.iterrows():
-        run_full_analysis(experiment, selected_weight, vel_table, momenta_table)
+        run_full_analysis(experiment, selected_weight, vel_table, momenta_table, gain_table, uncertainties)
 
     momenta_table[('', '  ratio')] = (momenta_table[('After', 'Kinetic energy (J)')] /
                                       momenta_table[('Before', 'Kinetic energy (J)')])
 
-    scatter_plot_with_line_fit(momenta_table, momenta_table[('Before', 'Momentum (kg-m/s)')],
-                                             momenta_table[('After', 'Momentum (kg-m/s)')], 'Momentum before (kg-m/s)',
-                                             'Momentum after (kg-m/s)', "Momentum")
+    scatter_plot_with_line_fit(momenta_table,
+                               ('Before', 'Momentum (kg-m/s)'),
+                               ('After', 'Momentum (kg-m/s)'),
+                               'Momentum before (kg-m/s)',
+                               'Momentum after (kg-m/s)',
+                               f"Conservation of momentum ({experiment})",
+                               ('Before', 'Momentum err (kg-m/s)'), ('After', 'Momentum err (kg-m/s)'))
     plt.savefig(f"plots/{experiment}/MomentumBeforeAfter.png", dpi=300)
     plt.close()
 
-    scatter_plot_with_line_fit(momenta_table, momenta_table[('Before', 'Kinetic energy (J)')],
-                                             momenta_table[('After', 'Kinetic energy (J)')],
-                                             'Kinetic energy before (J)',
-                                             'Kinetic energy after (J)', "Kinetic energy")
+    scatter_plot_with_line_fit(momenta_table, ('Before', 'Kinetic energy (J)'),
+                               ('After', 'Kinetic energy (J)'),
+                               'MKinetic energy before (J)',
+                               'Kinetic energy after (J)',
+                               f"Kinetic energy ({experiment})",
+                               ('Before', 'Kinetic energy err (J)'), ('After', 'Kinetic energy err (J)'))
     plt.savefig(f"plots/{experiment}/KineticBeforeAfter.png", dpi=300)
     plt.close()
 
-    vel_table.to_csv(f"results/{experiment}/{experiment}_collisions_velocities.csv")
-    momenta_table.to_csv(f"results/{experiment}/{experiment}_collisions_momenta.csv")
-    export_to_tex(vel_table, f"results/tex/{experiment}/{experiment}_collisions_velocities.tex", experiment)
-    export_to_tex(momenta_table, f"results/tex/{experiment}/{experiment}_collisions_momenta.tex", experiment)
+    print([f"{i[0]} {i[1]}" for i in vel_table.columns])
+
+    vel_table.to_csv(f"results/{experiment}/{experiment}_collisions_velocities.csv",
+                     header=[f"{i[0]} {i[1]}" for i in vel_table.columns])
+    momenta_table.to_csv(f"results/{experiment}/{experiment}_collisions_momenta.csv",
+                         header=[f"{i[0]} {i[1]}" for i in momenta_table.columns])
+    gain_table.to_csv(f"results/{experiment}/{experiment}_collisions_gain.csv",
+                      header=[f"{i[0]} {i[1]}" for i in gain_table.columns])
+
+    export_to_tex(vel_table, f"results/tex/{experiment}/{experiment}_collisions_velocities.tex", experiment,
+                  "Velocities")
+    export_to_tex(momenta_table, f"results/tex/{experiment}/{experiment}_collisions_momenta.tex", experiment,
+                  "Momenta", [('Before', 'Momentum (kg-m/s)'), ('Before', 'Kinetic energy (J)'),
+                              ('After', 'Kinetic energy (J)'), ('After', 'Momentum (kg-m/s)'), ('', '  ratio')])
+    export_to_tex(momenta_table, f"results/tex/{experiment}/{experiment}_collisions_momenta_err.tex", experiment,
+                  "MomentaErrors", [('Before', 'Momentum err (kg-m/s)'),
+                                    ('Before', 'Kinetic energy err (J)'),
+                                    ('After', 'Kinetic energy err (J)'), ('After', 'Momentum err (kg-m/s)')])
+    export_to_tex(gain_table, f"results/tex/{experiment}/{experiment}_collisions_gains.tex", experiment,
+                  "Gain")
 
 
-def export_to_tex(df, path, experiment):
-    head = [i[0] for i in df.columns]
-    sub_head = [i[1].split(" ") for i in df.columns]
-    # Find the maximum length of any sub-array
-    max_length = max([len(sublist) for sublist in sub_head])
-    # Fill missing values with empty strings
-    sub_head = [sublist + [''] * (max_length - len(sublist)) for sublist in sub_head]
-    l = []
-    for a, b in zip(head, sub_head):
-        l.append([a] + b)
-    h = list(zip(*l))
-    df.columns = pd.MultiIndex.from_arrays(h)
+def replacenth(string, sub, wanted, n):
+    where = [m.start() for m in re.finditer(sub, string)][n - 1]
+    before = string[:where]
+    after = string[where:]
+    after = after.replace(sub, wanted, 1)
+    newString = before + after
+    print(newString)
+
+
+def export_to_tex(df, path, experiment, label_extra, export_columns=None):
+    if export_columns is None:
+        export_columns = df.columns.tolist()
+
+    df = df[export_columns]
+
+    if type(df.columns) == pd.MultiIndex:
+        head = [i[0] for i in df.columns]
+        sub_head = [i[1].split(" ") for i in df.columns]
+        # Find the maximum length of any sub-array
+        max_length = max([len(sublist) for sublist in sub_head])
+        # Fill missing values with empty strings
+        sub_head = [sublist + [''] * (max_length - len(sublist)) for sublist in sub_head]
+        l = []
+        for a, b in zip(head, sub_head):
+            l.append([a] + b)
+        h = list(zip(*l))
+        df.columns = pd.MultiIndex.from_arrays(h)
 
     n_rows, n_cols = df.shape
     s = df.style
     s = s.format(precision=3)
     s = s.set_table_styles([
         {'selector': 'toprule', 'props': ':hline;'},
-        {'selector': 'midrule', 'props': ':hline;'},
+        {'selector': 'midrule', 'props': ':hline\\hline;'},
         {'selector': 'bottomrule', 'props': ':hline;'},
     ], overwrite=False)
-    label = f"tbl:{experiment}"
+    label = f"tbl:{experiment}{label_extra}"
     caption = f"Data for the {experiment.lower()} collision."
-    df_tex = s.to_latex(multicol_align='c|', column_format="|" + "r|" * (n_cols + 1),
-                        position="H", position_float="centering", label=label, caption=caption)
+    df_tex = s.to_latex(multicol_align='c|', column_format="|" + "r|" * (n_cols + 2),
+                        position="H", position_float="centering", label=label, caption=caption,
+                        clines="skip-last;data")
+    df_tex = df_tex.replace("%", "\\%")
     with open(path, "w") as f:
         f.write(df_tex)
         f.flush()
@@ -319,8 +512,9 @@ def export_to_tex(df, path, experiment):
 def main():
     create_folder_structure()
     experiments = ["Elastic", "Explosive", "Inelastic"]
+    uncertainties = load_uncertainties()
     for experiment in experiments:
-        analyze_experiment(experiment)
+        analyze_experiment(experiment, uncertainties)
 
 
 if __name__ == "__main__":

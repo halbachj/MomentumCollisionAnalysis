@@ -1,4 +1,4 @@
-weight_config,cart_a,cart_b,title
-no_weights,0.2727,0.2668,no additional weights
-weight_a,0.3969,0.5148,weight configuration A
-weight_b,0.6451,0.3907,weight configuration B
+weight_config,cartA,cartB,info,name
+no_weights,0.2727,0.2668,no additional weights,no weights
+weight_a,0.3969,0.5148,weight configuration A,weight set A
+weight_b,0.6451,0.3907,weight configuration B,weight set B
