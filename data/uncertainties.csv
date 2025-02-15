@@ -1,0 +1,4 @@
+quantity,value,type,unit
+position,0.01,percentage,m
+time,0.01,absolute,s
+mass,0.0001,absolute,kg
